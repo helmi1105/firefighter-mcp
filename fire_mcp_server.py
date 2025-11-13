@@ -5,7 +5,7 @@
 #   🌦 get_weather(city): live weather + wind data
 #   🚒 get_nearest_station(city): nearest fire station (OSM)
 # ----------------------------------------------------------
-
+import os
 from typing import Any
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -115,7 +115,8 @@ if __name__ == "__main__":
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
 
     # Get Render’s assigned port or use 8000 locally
-    port = int(os.environ.get("PORT", 8000))
+    os.environ["MCP_HTTP_PORT"] = os.environ.get("PORT", "8000")
+    os.environ["MCP_HTTP_HOST"] = "0.0.0.0"
 
-    # Run MCP HTTP server on all interfaces (for Render)
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=port)
+    # Start the MCP server (uses environment variables for config)
+    mcp.run(transport="streamable-http")
