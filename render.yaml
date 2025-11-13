@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: firefighter-mcp
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python fire_mcp_server.py
