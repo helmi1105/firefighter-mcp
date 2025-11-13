@@ -1,77 +1,75 @@
 # ---------------------------------------------------------
-# Firefighter MCP + FastAPI server (Render-compatible)
+# Firefighter MCP + FastAPI server (Threaded MCP, no conflicts)
 # ---------------------------------------------------------
 
 from fastapi import FastAPI
-from contextlib import asynccontextmanager
+from threading import Thread
 from mcp.server.fastmcp import FastMCP
-import anyio
 import httpx
 from typing import Any
+import os
+import uvicorn
 
 # ---------------------------------------------------------
-# Initialize MCP server
+# MCP server initialization
 # ---------------------------------------------------------
 mcp = FastMCP("firefighter")
 
-# Tools
+
 @mcp.tool()
 def get_weather(city: str) -> Any:
     try:
         geo = httpx.get(
             "https://nominatim.openstreetmap.org/search",
-            params={"city": city, "format": "json", "limit": 1},
-            timeout=20.0,
+            params={"city": city, "format": "json", "limit": 1}
         ).json()
+
         if not geo:
-            return {"error": f"City '{city}' not found."}
+            return {"error": "City not found"}
 
         lat, lon = geo[0]["lat"], geo[0]["lon"]
+
         weather = httpx.get(
             "https://api.open-meteo.com/v1/forecast",
-            params={"latitude": lat, "longitude": lon, "current_weather": True},
-        ).json().get("current_weather", {})
+            params={"latitude": lat, "longitude": lon, "current_weather": True}
+        ).json()["current_weather"]
 
-        return {
-            "city": city,
-            "temperature": weather.get("temperature"),
-            "windspeed": weather.get("windspeed"),
-            "winddirection": weather.get("winddirection"),
-        }
+        return weather
 
     except Exception as e:
         return {"error": str(e)}
 
 
 # ---------------------------------------------------------
-# Lifespan event: Start MCP server in background
+# Run MCP server in a separate thread
 # ---------------------------------------------------------
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    async with anyio.create_task_group() as tg:
-        # run MCP server without blocking FastAPI
-        tg.start_soon(mcp.run, "streamable-http")
-        yield
-        tg.cancel_scope.cancel()  # stop MCP server on shutdown
+def start_mcp():
+    # run MCP HTTP server on the same port OR different port
+    mcp.run(transport="streamable-http")
+
+
+mcp_thread = Thread(target=start_mcp, daemon=True)
+mcp_thread.start()
 
 
 # ---------------------------------------------------------
-# FastAPI app
+# FastAPI Server
 # ---------------------------------------------------------
-app = FastAPI(title="Firefighter MCP Server", lifespan=lifespan)
+app = FastAPI()
+
 
 @app.get("/")
-def home():
-    return {"status": "🔥 Firefighter MCP server running (FastAPI + MCP)"}
+def root():
+    return {
+        "status": "🔥 Firefighter server OK",
+        "fastapi": True,
+        "mcp": True
+    }
 
 
 # ---------------------------------------------------------
-# Uvicorn Entry
+# Start Uvicorn (FastAPI)
 # ---------------------------------------------------------
 if __name__ == "__main__":
-    import uvicorn
-    import os
-
     port = int(os.environ.get("PORT", 8000))
-
     uvicorn.run(app, host="0.0.0.0", port=port)
