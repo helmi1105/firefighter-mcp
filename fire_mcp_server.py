@@ -168,6 +168,10 @@ async def proxy_mcp(request: Request):
         body = await request.body()
         headers = dict(request.headers)
 
+        # Remove FastAPI "Accept-Encoding" because MCP transport doesn’t support it
+        headers.pop("accept-encoding", None)
+
+        # Send to internal MCP server
         result = await client.post(
             "http://127.0.0.1:8000/mcp",
             content=body,
@@ -175,16 +179,22 @@ async def proxy_mcp(request: Request):
             timeout=60
         )
 
+        # If MCP returned JSON → forward it safely
         try:
             return JSONResponse(
                 status_code=result.status_code,
                 content=result.json()
             )
-        except:
-            return Response(
+        except Exception:
+            # Force JSON even when it's plain text or errors
+            return JSONResponse(
                 status_code=result.status_code,
-                content=result.content
+                content={
+                    "error": "MCP server returned invalid JSON",
+                    "raw": result.text
+                }
             )
+
 
 
 # ===========================
