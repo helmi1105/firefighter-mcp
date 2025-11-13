@@ -6,8 +6,11 @@
 #   - OpenAI Realtime API (mcp_server.url = .../mcp)
 # -----------------------------------------------------
 
-from typing import Any
+import contextlib
+from fastapi import FastAPI
 import os
+
+from typing import Any
 import httpx
 from mcp.server.fastmcp import FastMCP
 
@@ -113,18 +116,22 @@ def get_nearest_station(city: str) -> Any:
         return {"error": str(e)}
 
 
-# -----------------------------------------------------
-# Main entrypoint — Streamable HTTP MCP server
-# -----------------------------------------------------
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
 
-    # FastMCP v2 supports host / port / path for HTTP transports :contentReference[oaicite:3]{index=3}
-    # This will expose your MCP server at:
-    #   http://0.0.0.0:<PORT>/mcp
-    mcp.run(
-        transport="streamable-http",
-        host="0.0.0.0",
-        port=port,
-        path="/mcp",
-    )
+
+
+# Create a combined lifespan to manage both session managers
+@contextlib.asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with contextlib.AsyncExitStack() as stack:
+        await stack.enter_async_context(mcp.session_manager.run())
+        yield
+
+
+app = FastAPI(lifespan=lifespan)
+app.mount("/fire", mcp.streamable_http_app())
+
+PORT = os.environ.get("PORT", 10000)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
