@@ -1,5 +1,5 @@
 # ----------------------------------------------------------
-# Firefighter MCP Server (Render-Ready, Pure MCP HTTP Server)
+# Firefighter MCP Server (Render-Ready)
 # ----------------------------------------------------------
 
 from typing import Any
@@ -10,27 +10,27 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("firefighter")
 
 
-# ----------------------------------------------------------
-# TOOL 1 — Get weather
-# ----------------------------------------------------------
+# -------------------------
+# TOOL: Weather
+# -------------------------
 @mcp.tool()
 def get_weather(city: str) -> Any:
     try:
         geo = httpx.get(
             "https://nominatim.openstreetmap.org/search",
             params={"city": city, "format": "json", "limit": 1},
-            headers={"User-Agent": "firefighter-mcp/1.0"},
-            timeout=20.0,
+            timeout=20.0
         ).json()
         if not geo:
             return {"error": f"City '{city}' not found."}
 
-        lat, lon = geo[0]["lat"], geo[0]["lon"]
+        lat = geo[0]["lat"]
+        lon = geo[0]["lon"]
 
         weather = httpx.get(
             "https://api.open-meteo.com/v1/forecast",
             params={"latitude": lat, "longitude": lon, "current_weather": True},
-            timeout=20.0,
+            timeout=20.0
         ).json().get("current_weather", {})
 
         return {
@@ -44,32 +44,33 @@ def get_weather(city: str) -> Any:
         return {"error": str(e)}
 
 
-# ----------------------------------------------------------
-# TOOL 2 — Closest fire station
-# ----------------------------------------------------------
+# -------------------------
+# TOOL: Nearest fire station
+# -------------------------
 @mcp.tool()
 def get_nearest_station(city: str) -> Any:
     try:
         geo = httpx.get(
             "https://nominatim.openstreetmap.org/search",
             params={"city": city, "format": "json"},
-            timeout=20.0,
+            timeout=20.0
         ).json()
-
         if not geo:
             return {"error": f"City '{city}' not found."}
 
-        lat, lon = geo[0]["lat"], geo[0]["lon"]
+        lat = geo[0]["lat"]
+        lon = geo[0]["lon"]
 
         query = f"""
         [out:json];
         node["amenity"="fire_station"](around:8000,{lat},{lon});
         out;
         """
+
         data = httpx.post(
             "https://overpass-api.de/api/interpreter",
             data={"data": query},
-            timeout=20.0,
+            timeout=20.0
         ).json()
 
         if not data.get("elements"):
@@ -87,13 +88,9 @@ def get_nearest_station(city: str) -> Any:
         return {"error": str(e)}
 
 
-# ----------------------------------------------------------
-# Run Pure MCP HTTP Server (NO FastAPI!)
-# ----------------------------------------------------------
+# -------------------------
+# Run MCP HTTP server
+# -------------------------
 if __name__ == "__main__":
-    import os
-
-    port = int(os.environ.get("PORT", 8000))
-
-    # Run MCP HTTP server on given port
-    mcp.run(transport="streamable-http", port=port, host="0.0.0.0")
+    # DO NOT PASS host or port → MCP binds automatically to $PORT
+    mcp.run(transport="streamable-http")
