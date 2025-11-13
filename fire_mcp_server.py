@@ -1,16 +1,14 @@
 # fire_mcp_server.py
 # ----------------------------------------------------------
-# Firefighter MCP Server (Render-ready)
-# Provides:
-#   🌦 get_weather(city): live weather + wind data
-#   🚒 get_nearest_station(city): nearest fire station (OSM)
+# Firefighter MCP Server (Render-Ready, Uvicorn compatible)
 # ----------------------------------------------------------
-import os
+
 from typing import Any
 import httpx
 from mcp.server.fastmcp import FastMCP
 from fastapi import FastAPI
 import asyncio
+import os
 
 # Initialize MCP server
 mcp = FastMCP("firefighter")
@@ -26,7 +24,7 @@ def get_weather(city: str) -> Any:
             "https://nominatim.openstreetmap.org/search",
             params={"city": city, "format": "json", "limit": 1},
             headers={"User-Agent": "firefighter-mcp/1.0"},
-            timeout=20.0
+            timeout=20.0,
         ).json()
         if not geo:
             return {"error": f"City '{city}' not found."}
@@ -36,7 +34,7 @@ def get_weather(city: str) -> Any:
             "https://api.open-meteo.com/v1/forecast",
             params={"latitude": lat, "longitude": lon, "current_weather": True},
             headers={"User-Agent": "firefighter-mcp/1.0"},
-            timeout=20.0
+            timeout=20.0,
         ).json().get("current_weather", {})
 
         return {
@@ -46,7 +44,7 @@ def get_weather(city: str) -> Any:
             "temperature": weather.get("temperature"),
             "windspeed": weather.get("windspeed"),
             "winddirection": weather.get("winddirection"),
-            "source": "Open-Meteo API"
+            "source": "Open-Meteo API",
         }
 
     except Exception as e:
@@ -63,7 +61,7 @@ def get_nearest_station(city: str) -> Any:
             "https://nominatim.openstreetmap.org/search",
             params={"city": city, "format": "json", "limit": 1},
             headers={"User-Agent": "firefighter-mcp/1.0"},
-            timeout=20.0
+            timeout=20.0,
         ).json()
         if not geo:
             return {"error": f"City '{city}' not found."}
@@ -78,7 +76,7 @@ def get_nearest_station(city: str) -> Any:
             "https://overpass-api.de/api/interpreter",
             data={"data": query},
             headers={"User-Agent": "firefighter-mcp/1.0"},
-            timeout=30.0
+            timeout=30.0,
         ).json()
 
         if not data.get("elements"):
@@ -90,33 +88,34 @@ def get_nearest_station(city: str) -> Any:
             "station_name": st.get("tags", {}).get("name", "Unknown Station"),
             "latitude": st.get("lat"),
             "longitude": st.get("lon"),
-            "source": "OpenStreetMap Overpass API"
+            "source": "OpenStreetMap Overpass API",
         }
 
     except Exception as e:
         return {"error": str(e)}
 
 # ----------------------------------------------------------
-# ✅ Add a small FastAPI wrapper for Render health check
+# ✅ FastAPI Wrapper for Render Health Check
 # ----------------------------------------------------------
-
-# This small app responds to "/" so Render health checks pass
-app = FastAPI()
+app = FastAPI(title="Firefighter MCP Server")
 
 @app.get("/")
 def root():
-    return {"status": "Firefighter MCP server is running 🚒"}
+    return {"status": "🔥 Firefighter MCP server is running"}
 
 # ----------------------------------------------------------
-# 🚀 Run the MCP Server (HTTP transport)
+# 🚀 Run the MCP Server + FastAPI HTTP server
 # ----------------------------------------------------------
 if __name__ == "__main__":
-    import sys, logging, os
-    logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
+    import sys
+    import logging
+    import uvicorn
 
-    # Get Render’s assigned port or use 8000 locally
-    os.environ["MCP_HTTP_PORT"] = os.environ.get("PORT", "8000")
-    os.environ["MCP_HTTP_HOST"] = "0.0.0.0"
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO)
 
-    # Start the MCP server (uses environment variables for config)
-    mcp.run(transport="streamable-http")
+    # Run MCP HTTP transport in background
+    asyncio.create_task(mcp.run(transport="streamable-http"))
+
+    # Bind FastAPI to 0.0.0.0:$PORT for Render
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
