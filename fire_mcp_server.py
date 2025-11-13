@@ -5,8 +5,9 @@
 import os
 import httpx
 from typing import Any
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from threading import Thread
 from mcp.server.fastmcp import FastMCP
 import uvicorn
@@ -17,12 +18,12 @@ import uvicorn
 
 mcp = FastMCP("firefighter")
 
+
 # ---------------------------------------------------------
 # TOOL 1 — Weather
 # ---------------------------------------------------------
 @mcp.tool()
 def get_weather(city: str) -> Any:
-    """Get weather (temperature, windspeed, wind direction) for a city."""
     try:
         geo = httpx.get(
             "https://nominatim.openstreetmap.org/search",
@@ -40,13 +41,13 @@ def get_weather(city: str) -> Any:
             "https://api.open-meteo.com/v1/forecast",
             params={"latitude": lat, "longitude": lon, "current_weather": True},
             timeout=20,
-        ).json().get("current_weather", {})
+        ).json()["current_weather"]
 
         return {
             "city": city,
-            "temperature": weather.get("temperature"),
-            "windspeed": weather.get("windspeed"),
-            "wind_direction": weather.get("winddirection"),
+            "temperature": weather["temperature"],
+            "windspeed": weather["windspeed"],
+            "wind_direction": weather["winddirection"],
         }
 
     except Exception as e:
@@ -58,7 +59,6 @@ def get_weather(city: str) -> Any:
 # ---------------------------------------------------------
 @mcp.tool()
 def get_nearest_station(city: str) -> Any:
-    """Find nearest fire station within 8km using OSM Overpass API."""
     try:
         geo = httpx.get(
             "https://nominatim.openstreetmap.org/search",
@@ -72,7 +72,7 @@ def get_nearest_station(city: str) -> Any:
         lat = geo[0]["lat"]
         lon = geo[0]["lon"]
 
-        overpass_query = f"""
+        query = f"""
         [out:json];
         node["amenity"="fire_station"](around:8000,{lat},{lon});
         out center;
@@ -80,21 +80,21 @@ def get_nearest_station(city: str) -> Any:
 
         result = httpx.post(
             "https://overpass-api.de/api/interpreter",
-            data={"data": overpass_query},
+            data={"data": query},
             timeout=30,
         ).json()
 
         if not result.get("elements"):
             return {"message": f"No fire stations found near {city}"}
 
-        station = result["elements"][0]
+        st = result["elements"][0]
 
         return {
             "city": city,
-            "station_name": station.get("tags", {}).get("name", "Unknown"),
-            "latitude": station.get("lat"),
-            "longitude": station.get("lon"),
-            "source": "OpenStreetMap Overpass API",
+            "station_name": st.get("tags", {}).get("name", "Unknown"),
+            "latitude": st.get("lat"),
+            "longitude": st.get("lon"),
+            "source": "OpenStreetMap Overpass API"
         }
 
     except Exception as e:
@@ -102,62 +102,93 @@ def get_nearest_station(city: str) -> Any:
 
 
 # ---------------------------------------------------------
-# 2. Start MCP server in a separate internal thread
+# 2. Start MCP server in a background thread
 # ---------------------------------------------------------
-
 def start_mcp_server():
-    """
-    Runs MCP's HTTP server in standalone mode.
-    MCP automatically binds to internal port 8000.
-    """
-    print("🔥 Starting internal MCP server on port 8000...")
-    mcp.run(transport="streamable-http")
+    mcp.run(transport="streamable-http")  # MCP automatically binds to port 8000
 
-# start MCP
+
 thread = Thread(target=start_mcp_server, daemon=True)
 thread.start()
 
 
 # ===========================
-# 3. FASTAPI (public server)
+# 3. FASTAPI SERVER
 # ===========================
 
-app = FastAPI(title="🔥 Firefighter MCP API")
+app = FastAPI(title="Firefighter MCP API")
+
+# Allow CORS (fix OPTIONS requests)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.get("/")
 def home():
-    return {"status": "OK", "message": "FastAPI + MCP are running"}
+    return {
+        "status": "OK",
+        "message": "FastAPI + MCP running",
+        "mcp_endpoint": "/mcp",
+    }
 
 
 # ---------------------------------------------------------
-# Proxy /mcp → internal MCP server
+# MCP CAPABILITIES ENDPOINT (HTTP GET)
+# Required by MCP spec
 # ---------------------------------------------------------
-@app.api_route("/mcp", methods=["GET", "POST"])
+@app.get("/mcp")
+def mcp_get():
+    """Return MCP capabilities document."""
+    return {
+        "mcp_version": "1.0.0",
+        "capabilities": {
+            "tools": ["get_weather", "get_nearest_station"]
+        }
+    }
+
+
+# ---------------------------------------------------------
+# Allow CORS for preflight requests
+# ---------------------------------------------------------
+@app.options("/mcp")
+def mcp_options():
+    return Response(status_code=200)
+
+
+# ---------------------------------------------------------
+# Proxy POST to internal MCP server
+# ---------------------------------------------------------
+@app.post("/mcp")
 async def proxy_mcp(request: Request):
-    """
-    Realtime API uses POST /mcp.
-    We proxy everything to the internal MCP server.
-    """
     async with httpx.AsyncClient() as client:
         body = await request.body()
         headers = dict(request.headers)
 
-        mcp_response = await client.request(
-            request.method,
+        result = await client.post(
             "http://127.0.0.1:8000/mcp",
             content=body,
             headers=headers,
-            timeout=30
+            timeout=60
         )
 
-        return JSONResponse(
-            status_code=mcp_response.status_code,
-            content=mcp_response.json()
-        )
+        try:
+            return JSONResponse(
+                status_code=result.status_code,
+                content=result.json()
+            )
+        except:
+            return Response(
+                status_code=result.status_code,
+                content=result.content
+            )
 
 
 # ===========================
-# 4. Start FastAPI on Render port
+# 4. Run FastAPI
 # ===========================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
