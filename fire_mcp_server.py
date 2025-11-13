@@ -1,6 +1,6 @@
 # fire_mcp_server.py
 # ----------------------------------------------------------
-# Firefighter MCP Server
+# Firefighter MCP Server (Render-ready)
 # Provides:
 #   🌦 get_weather(city): live weather + wind data
 #   🚒 get_nearest_station(city): nearest fire station (OSM)
@@ -9,6 +9,8 @@
 from typing import Any
 import httpx
 from mcp.server.fastmcp import FastMCP
+from fastapi import FastAPI
+import asyncio
 
 # Initialize MCP server
 mcp = FastMCP("firefighter")
@@ -95,10 +97,22 @@ def get_nearest_station(city: str) -> Any:
         return {"error": str(e)}
 
 # ----------------------------------------------------------
-# Run the MCP Server (STDIO transport)
+# ✅ Add a small FastAPI wrapper for Render health check
+# ----------------------------------------------------------
+
+# This small app responds to "/" so Render health checks pass
+app = FastAPI()
+
+@app.get("/")
+def root():
+    return {"status": "Firefighter MCP server is running 🚒"}
+
+# ----------------------------------------------------------
+# 🚀 Run the MCP Server (HTTP transport)
 # ----------------------------------------------------------
 if __name__ == "__main__":
     import sys, logging
-    # Only log to STDERR (never stdout)
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
-    mcp.run(transport="streamable-http")
+
+    # Run MCP + FastAPI together
+    asyncio.run(mcp.run(transport="streamable-http"))
