@@ -1,24 +1,22 @@
 # fire_mcp_server.py
-# ----------------------------------------------------------
-# Firefighter MCP Server (Render-Ready, Uvicorn compatible)
-# ----------------------------------------------------------
 
 from typing import Any
 import httpx
-from mcp.server.fastmcp import FastMCP
 from fastapi import FastAPI
+from mcp.server.fastmcp import FastMCP
 import asyncio
 import os
 
+# ---------------------------------------------
 # Initialize MCP server
+# ---------------------------------------------
 mcp = FastMCP("firefighter")
 
-# ----------------------------------------------------------
-# TOOL 1 — Get weather information
-# ----------------------------------------------------------
+# ---------------------------------------------
+# Tools
+# ---------------------------------------------
 @mcp.tool()
 def get_weather(city: str) -> Any:
-    """Return temperature, windspeed, and wind direction for a city."""
     try:
         geo = httpx.get(
             "https://nominatim.openstreetmap.org/search",
@@ -26,8 +24,10 @@ def get_weather(city: str) -> Any:
             headers={"User-Agent": "firefighter-mcp/1.0"},
             timeout=20.0,
         ).json()
+
         if not geo:
             return {"error": f"City '{city}' not found."}
+
         lat, lon = geo[0]["lat"], geo[0]["lon"]
 
         weather = httpx.get(
@@ -46,16 +46,12 @@ def get_weather(city: str) -> Any:
             "winddirection": weather.get("winddirection"),
             "source": "Open-Meteo API",
         }
-
     except Exception as e:
         return {"error": str(e)}
 
-# ----------------------------------------------------------
-# TOOL 2 — Find nearest fire station
-# ----------------------------------------------------------
+
 @mcp.tool()
 def get_nearest_station(city: str) -> Any:
-    """Return the nearest fire station within 8km using OpenStreetMap Overpass API."""
     try:
         geo = httpx.get(
             "https://nominatim.openstreetmap.org/search",
@@ -63,8 +59,10 @@ def get_nearest_station(city: str) -> Any:
             headers={"User-Agent": "firefighter-mcp/1.0"},
             timeout=20.0,
         ).json()
+
         if not geo:
             return {"error": f"City '{city}' not found."}
+
         lat, lon = geo[0]["lat"], geo[0]["lon"]
 
         query = f"""
@@ -81,6 +79,7 @@ def get_nearest_station(city: str) -> Any:
 
         if not data.get("elements"):
             return {"message": f"No fire stations found near {city}."}
+
         st = data["elements"][0]
 
         return {
@@ -90,32 +89,35 @@ def get_nearest_station(city: str) -> Any:
             "longitude": st.get("lon"),
             "source": "OpenStreetMap Overpass API",
         }
-
     except Exception as e:
         return {"error": str(e)}
 
-# ----------------------------------------------------------
-# ✅ FastAPI Wrapper for Render Health Check
-# ----------------------------------------------------------
+
+# ---------------------------------------------
+# FastAPI + MCP Background Runner
+# ---------------------------------------------
 app = FastAPI(title="Firefighter MCP Server")
+
+
+@app.on_event("startup")
+async def start_mcp():
+    """Start the MCP server in the background once FastAPI starts."""
+    asyncio.create_task(mcp.run(transport="streamable-http"))
+
 
 @app.get("/")
 def root():
     return {"status": "🔥 Firefighter MCP server is running"}
 
-# ----------------------------------------------------------
-# 🚀 Run the MCP Server + FastAPI HTTP server
-# ----------------------------------------------------------
+
+# ---------------------------------------------
+# Run Uvicorn
+# ---------------------------------------------
 if __name__ == "__main__":
-    import sys
-    import logging
     import uvicorn
 
-    logging.basicConfig(stream=sys.stderr, level=logging.INFO)
-
-    # Run MCP HTTP transport in background
-    asyncio.create_task(mcp.run(transport="streamable-http"))
-
-    # Bind FastAPI to 0.0.0.0:$PORT for Render
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 8000)),
+    )
