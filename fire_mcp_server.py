@@ -1,38 +1,41 @@
-# ---------------------------------------------------------
-# Firefighter MCP + FastAPI unified service (Render-ready)
-# ---------------------------------------------------------
+# fire_mcp_server.py
+# -----------------------------------------------------
+# Firefighter MCP server — Streamable HTTP, Render-ready
+# Works with:
+#   - MCP Inspector (Transport: Streamable HTTP)
+#   - OpenAI Realtime API (mcp_server.url = .../mcp)
+# -----------------------------------------------------
 
+from typing import Any
 import os
 import httpx
-from typing import Any
-from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from threading import Thread
-from mcp.server.fastmcp import FastMCP
-import uvicorn
+from fastmcp import FastMCP  # <- NOTE: from fastmcp, not mcp.server.fastmcp
 
-# ===========================
-# 1. MCP SERVER SETUP
-# ===========================
+# Create MCP server (stateless_http/json_response tuned for HTTP)
+mcp = FastMCP(
+    "firefighter",
+    stateless_http=True,   # good for remote HTTP servers :contentReference[oaicite:2]{index=2}
+    json_response=True
+)
 
-mcp = FastMCP("firefighter")
-
-
-# ---------------------------------------------------------
-# TOOL 1 — Weather
-# ---------------------------------------------------------
+# -----------------------------------------------------
+# TOOL 1 — Get weather
+# -----------------------------------------------------
 @mcp.tool()
 def get_weather(city: str) -> Any:
+    """
+    Return temperature, windspeed, and wind direction for a city.
+    """
     try:
         geo = httpx.get(
             "https://nominatim.openstreetmap.org/search",
             params={"city": city, "format": "json", "limit": 1},
-            timeout=20,
+            headers={"User-Agent": "firefighter-mcp/1.0"},
+            timeout=20.0,
         ).json()
 
         if not geo:
-            return {"error": f"City '{city}' not found"}
+            return {"error": f"City '{city}' not found."}
 
         lat = geo[0]["lat"]
         lon = geo[0]["lon"]
@@ -40,34 +43,42 @@ def get_weather(city: str) -> Any:
         weather = httpx.get(
             "https://api.open-meteo.com/v1/forecast",
             params={"latitude": lat, "longitude": lon, "current_weather": True},
-            timeout=20,
-        ).json()["current_weather"]
+            headers={"User-Agent": "firefighter-mcp/1.0"},
+            timeout=20.0,
+        ).json().get("current_weather", {})
 
         return {
             "city": city,
-            "temperature": weather["temperature"],
-            "windspeed": weather["windspeed"],
-            "wind_direction": weather["winddirection"],
+            "latitude": lat,
+            "longitude": lon,
+            "temperature": weather.get("temperature"),
+            "windspeed": weather.get("windspeed"),
+            "winddirection": weather.get("winddirection"),
+            "source": "Open-Meteo API",
         }
 
     except Exception as e:
         return {"error": str(e)}
 
 
-# ---------------------------------------------------------
-# TOOL 2 — Nearest fire station
-# ---------------------------------------------------------
+# -----------------------------------------------------
+# TOOL 2 — Find nearest fire station
+# -----------------------------------------------------
 @mcp.tool()
 def get_nearest_station(city: str) -> Any:
+    """
+    Return the nearest fire station within ~8km using OpenStreetMap Overpass API.
+    """
     try:
         geo = httpx.get(
             "https://nominatim.openstreetmap.org/search",
             params={"city": city, "format": "json", "limit": 1},
-            timeout=20,
+            headers={"User-Agent": "firefighter-mcp/1.0"},
+            timeout=20.0,
         ).json()
 
         if not geo:
-            return {"error": f"City '{city}' not found"}
+            return {"error": f"City '{city}' not found."}
 
         lat = geo[0]["lat"]
         lon = geo[0]["lon"]
@@ -78,128 +89,42 @@ def get_nearest_station(city: str) -> Any:
         out center;
         """
 
-        result = httpx.post(
+        data = httpx.post(
             "https://overpass-api.de/api/interpreter",
             data={"data": query},
-            timeout=30,
+            headers={"User-Agent": "firefighter-mcp/1.0"},
+            timeout=30.0,
         ).json()
 
-        if not result.get("elements"):
-            return {"message": f"No fire stations found near {city}"}
+        if not data.get("elements"):
+            return {"message": f"No fire stations found near {city}."}
 
-        st = result["elements"][0]
+        st = data["elements"][0]
 
         return {
             "city": city,
-            "station_name": st.get("tags", {}).get("name", "Unknown"),
+            "station_name": st.get("tags", {}).get("name", "Unknown Station"),
             "latitude": st.get("lat"),
             "longitude": st.get("lon"),
-            "source": "OpenStreetMap Overpass API"
+            "source": "OpenStreetMap Overpass API",
         }
 
     except Exception as e:
         return {"error": str(e)}
 
 
-# ---------------------------------------------------------
-# 2. Start MCP server in a background thread
-# ---------------------------------------------------------
-def start_mcp_server():
-    mcp.run(transport="streamable-http")  # MCP automatically binds to port 8000
-
-
-thread = Thread(target=start_mcp_server, daemon=True)
-thread.start()
-
-
-# ===========================
-# 3. FASTAPI SERVER
-# ===========================
-
-app = FastAPI(title="Firefighter MCP API")
-
-# Allow CORS (fix OPTIONS requests)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-@app.get("/")
-def home():
-    return {
-        "status": "OK",
-        "message": "FastAPI + MCP running",
-        "mcp_endpoint": "/mcp",
-    }
-
-
-# ---------------------------------------------------------
-# MCP CAPABILITIES ENDPOINT (HTTP GET)
-# Required by MCP spec
-# ---------------------------------------------------------
-@app.get("/mcp")
-def mcp_get():
-    """Return MCP capabilities document."""
-    return {
-        "mcp_version": "1.0.0",
-        "capabilities": {
-            "tools": ["get_weather", "get_nearest_station"]
-        }
-    }
-
-
-# ---------------------------------------------------------
-# Allow CORS for preflight requests
-# ---------------------------------------------------------
-@app.options("/mcp")
-def mcp_options():
-    return Response(status_code=200)
-
-
-# ---------------------------------------------------------
-# Proxy POST to internal MCP server
-# ---------------------------------------------------------
-@app.post("/mcp")
-async def proxy_mcp(request: Request):
-    async with httpx.AsyncClient() as client:
-        body = await request.body()
-        headers = dict(request.headers)
-
-        # Remove FastAPI "Accept-Encoding" because MCP transport doesn’t support it
-        headers.pop("accept-encoding", None)
-
-        # Send to internal MCP server
-        result = await client.post(
-            "http://127.0.0.1:8000/mcp",
-            content=body,
-            headers=headers,
-            timeout=60
-        )
-
-        # If MCP returned JSON → forward it safely
-        try:
-            return JSONResponse(
-                status_code=result.status_code,
-                content=result.json()
-            )
-        except Exception:
-            # Force JSON even when it's plain text or errors
-            return JSONResponse(
-                status_code=result.status_code,
-                content={
-                    "error": "MCP server returned invalid JSON",
-                    "raw": result.text
-                }
-            )
-
-
-
-# ===========================
-# 4. Run FastAPI
-# ===========================
+# -----------------------------------------------------
+# Main entrypoint — Streamable HTTP MCP server
+# -----------------------------------------------------
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    port = int(os.environ.get("PORT", 8000))
+
+    # FastMCP v2 supports host / port / path for HTTP transports :contentReference[oaicite:3]{index=3}
+    # This will expose your MCP server at:
+    #   http://0.0.0.0:<PORT>/mcp
+    mcp.run(
+        transport="streamable-http",
+        host="0.0.0.0",
+        port=port,
+        path="/mcp",
+    )
