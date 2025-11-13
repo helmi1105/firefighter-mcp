@@ -2,6 +2,11 @@ services:
   - type: web
     name: firefighter-mcp
     env: python
-    plan: free
+    region: frankfurt
+    plan: starter
     buildCommand: pip install -r requirements.txt
     startCommand: python fire_mcp_server.py
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: "8000"
