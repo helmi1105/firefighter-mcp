@@ -9,7 +9,7 @@
 from typing import Any
 import os
 import httpx
-from fastmcp import FastMCP  # <- NOTE: from fastmcp, not mcp.server.fastmcp
+from mcp.server.fastmcp import FastMCP
 
 # Create MCP server (stateless_http/json_response tuned for HTTP)
 mcp = FastMCP(
