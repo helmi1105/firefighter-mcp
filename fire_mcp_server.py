@@ -111,8 +111,11 @@ def root():
 # 🚀 Run the MCP Server (HTTP transport)
 # ----------------------------------------------------------
 if __name__ == "__main__":
-    import sys, logging
+    import sys, logging, os
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
 
-    # Run MCP + FastAPI together
-    asyncio.run(mcp.run(transport="streamable-http"))
+    # Get Render’s assigned port or use 8000 locally
+    port = int(os.environ.get("PORT", 8000))
+
+    # Run MCP HTTP server on all interfaces (for Render)
+    mcp.run(transport="streamable-http", host="0.0.0.0", port=port)
